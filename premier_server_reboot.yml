@@ -2,5 +2,5 @@
 - hosts: all
 
   tasks:
-      - name: Reboot the machine with all defaults
-        win_reboot:
+  - name: Reboot the machine with all defaults
+    win_reboot:
