@@ -1,0 +1,25 @@
+---
+- name: Windows Patching
+  hosts: all
+  become: no
+  gather_facts: false
+
+  tasks:
+  - name: check for missing updates.
+    win_updates:
+      state: searched
+    register: update_count
+
+  - debug:
+      var: update_count
+
+  - name: install all windows updates
+    win_updates:
+      category_names:
+      - CriticalUpdates
+      - DefinitionUpdates
+      - SecurityUpdates
+      - UpdateRollups
+      - Updates
+      reboot: yes
+    when: update_count.found_update_count|int >= 1
