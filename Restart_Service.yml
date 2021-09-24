@@ -1,0 +1,11 @@
+---
+- name: Windows Base Setup
+  hosts: all
+  become: no
+  gather_facts: false
+
+  tasks:
+  - name: Restart a service
+    win_service:
+      name: "{{ win_service }}"
+      state: restarted
