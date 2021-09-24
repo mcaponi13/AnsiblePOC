@@ -1,0 +1,102 @@
+# Playbook to expand the volue on a VM on Vsphere and expand under Windows in the same playbook
+- hosts: "{{ server_name }}"
+  gather_facts: yes
+  become: no
+  tasks:
+    - set_fact:
+        disks: "{ '{{ drive_letter }}': { 'capacity_gb': {{ new_size_gb }} } }"
+
+    - name: Get scsi bus (Windows)
+      win_shell: $(gwmi -class Win32_DiskDrive | where-object {$_.__Path -eq $(gwmi -class Win32_DiskDriveToDiskPartition | where-object {$_.dependent -eq $(gwmi -class Win32_LogicalDiskToPartition | where-object {$_.dependent -eq $(Get-WmiObject -class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "{{ item.key }}:" }).path}).Antecedent}).antecedent}).scsibus
+      with_dict: "{{ disks }}"
+      register: diskinfowinscsibus
+      delegate_to: "{{ server_name }}"
+      changed_when: "false"
+
+    - name: Get scsi target id (Windows)
+      win_shell: $(gwmi -class Win32_DiskDrive | where-object {$_.__Path -eq $(gwmi -class Win32_DiskDriveToDiskPartition | where-object {$_.dependent -eq $(gwmi -class Win32_LogicalDiskToPartition | where-object {$_.dependent -eq $(Get-WmiObject -class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "{{ item.key }}:" }).path}).Antecedent}).antecedent}).scsitargetid
+      with_dict: "{{ disks }}"
+      register: diskinfowinscsitargetid
+      delegate_to: "{{ server_name }}"
+      changed_when: "false"
+
+    - name: Get disk index (Windows)
+      win_shell: $(gwmi -class Win32_DiskDrive | where-object {$_.__Path -eq $(gwmi -class Win32_DiskDriveToDiskPartition | where-object {$_.dependent -eq $(gwmi -class Win32_LogicalDiskToPartition | where-object {$_.dependent -eq $(Get-WmiObject -class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "{{ item.key }}:" }).path}).Antecedent}).antecedent}).index
+      with_dict: "{{ disks }}"
+      register: diskinfowindiskindex
+      delegate_to: "{{ server_name }}"
+      changed_when: "false"
+
+    - set_fact:
+        bus: "{{ new_item }}"
+      vars:
+        new_item: "{ '{{ item.item.key }}': { 'controller_number': {{ item.stdout_lines[0] }} } }"
+      loop: "{{ diskinfowinscsibus.results }}"
+
+    - set_fact:
+        target: "{{ new_item }}"
+      vars:
+        new_item: "{ '{{ item.item.key }}': { 'unit_number': {{ item.stdout_lines[0] }} } }"
+      loop: "{{ diskinfowinscsitargetid.results }}"
+
+    - set_fact:
+        index: "{{ new_item }}"
+      vars:
+        new_item: "{ '{{ item.item.key }}': { 'index': {{ item.stdout_lines[0] }} } }"
+      loop: "{{ diskinfowindiskindex.results }}"
+
+    - set_fact:
+        newdisks: "{{ disks | combine(bus, recursive=True)|combine(target, recursive=True)|combine(index, recursive=True) }}"
+
+    - name: get VM disk info
+      vmware_guest_disk_facts:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ datacenter_name }}"
+        name: "{{ server_name }}"
+        validate_certs: no
+      delegate_to: localhost
+      register: vmdiskfacts
+
+    - name: Deletes all shapshots snapshot
+      vmware_guest_snapshot:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ datacenter_name }}"
+        folder: "/{{ datacenter_name }}/vm/"
+        name: "{{ server_name }}"
+        validate_certs: no
+        state: remove_all
+      delegate_to: localhost
+
+    - name: set new disk capacity
+      vmware_guest_disk:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ datacenter_name }}"
+        validate_certs: no
+        name: "{{ server_name }}"
+        disk:
+          - size_gb: "{{ item.value.capacity_gb }}"
+            unit_number: "{{ item.value.unit_number }}"
+            autoselect_datastore: true
+            state: present
+            scsi_controller: "{{ item.value.controller_number }}"
+      with_dict: "{{ newdisks }}"
+      delegate_to: localhost
+      register: vmdisk
+
+    - name: Rescan disks (windows)
+      win_shell: Update-Disk -Number "{{ item.value.index }}"
+      with_dict: "{{ newdisks }}"
+      delegate_to: "{{ server_name }}"
+
+    - name: Grow partition (windows)
+      win_partition:
+        drive_letter: "{{ item.key }}"
+        partition_size: -1
+      with_dict: "{{ newdisks }}"
+      delegate_to: "{{ server_name }}"
