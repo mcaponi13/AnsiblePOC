@@ -1,0 +1,7 @@
+- hosts: all
+  become: yes
+  gather_facts: yes
+  tasks:
+  - name: Print Cool System Uptimes
+    debug:
+      msg: Uptime in Human Form - {{ now() - now().fromtimestamp(now(fmt='%s') | int - ansible_uptime_seconds) }}
